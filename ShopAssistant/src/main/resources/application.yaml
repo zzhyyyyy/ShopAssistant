@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: ShopAssistant
+  datasource:
+    url: jdbc:postgresql://8.163.27.12:5432/jchatmind
+    username: muzhiyuan
+    password: 20031121zzh.
+    driver-class-name: org.postgresql.Driver
+  mail:
+    host: smtp.qq.com
+    port: 587
+    username: 2685922758@qq.com
+    password: iihshbccvrrxddgc # 邮箱授权码
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+  ai:
+    deepseek:
+      api-key: sk-69e232cd553a41f481e3982933e6c75c
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+    zhipuai:
+      api-key: your-api-key
+      base-url: https://open.bigmodel.cn/api/paas
+      chat:
+        options:
+          model: glm-4.6
+mybatis:
+  type-aliases-package: com.xmu.ShopAssistant.model.entity
+  mapper-locations: classpath:mapper/*.xml
+  type-handlers-package: com.xmu.ShopAssistant.typehandler
+
+document:
+  storage:
+    base-path: ./data/documents
