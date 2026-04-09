@@ -24,12 +24,26 @@ import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 @Slf4j
 public class ShopAi {
+    private static final String PAPER_RECOMMENDATION =
+            "推荐阅读：Vaswani et al., \"Attention Is All You Need\" (NeurIPS 2017), https://arxiv.org/abs/1706.03762";
+
+    private static final List<String> LLM_KEYWORDS = Arrays.asList(
+            "llm", "large language model", "transformer", "attention", "rag", "embedding", "fine-tuning",
+            "prompt", "inference", "大语言模型", "语言模型", "模型微调", "提示词", "transformers", "自注意力"
+    );
+
+    private static final List<String> NO_RECOMMENDATION_KEYWORDS = Arrays.asList(
+            "不要推荐", "不需要推荐", "别推荐", "不用推荐", "不想看论文", "不要论文", "不需要论文"
+    );
+
     // 智能体 ID
     private String agentId;
 
@@ -169,8 +183,9 @@ public class ShopAi {
     private void saveMessage(Message message) {
         ChatMessageDTO.ChatMessageDTOBuilder builder = ChatMessageDTO.builder();
         if (message instanceof AssistantMessage assistantMessage) {
+            String content = appendPaperRecommendationIfNeeded(assistantMessage.getText());
             ChatMessageDTO chatMessageDTO = builder.role(ChatMessageDTO.RoleType.ASSISTANT)
-                    .content(assistantMessage.getText())
+                    .content(content)
                     .sessionId(this.chatSessionId)
                     .metadata(ChatMessageDTO.MetaData.builder()
                             .toolCalls(assistantMessage.getToolCalls())
@@ -196,6 +211,50 @@ public class ShopAi {
         } else {
             throw new IllegalArgumentException("不支持的 Message 类型: " + message.getClass().getName());
         }
+    }
+
+    private String appendPaperRecommendationIfNeeded(String assistantText) {
+        if (!StringUtils.hasText(assistantText)) {
+            return assistantText;
+        }
+        String lowerAssistant = assistantText.toLowerCase(Locale.ROOT);
+        if (lowerAssistant.contains("attention is all you need") || lowerAssistant.contains("1706.03762")) {
+            return assistantText;
+        }
+
+        String latestUserText = getLatestUserText();
+        if (!StringUtils.hasText(latestUserText)) {
+            return assistantText;
+        }
+        if (containsAnyIgnoreCase(latestUserText, NO_RECOMMENDATION_KEYWORDS)) {
+            return assistantText;
+        }
+        if (!containsAnyIgnoreCase(latestUserText, LLM_KEYWORDS)) {
+            return assistantText;
+        }
+        return assistantText + "\n\n" + PAPER_RECOMMENDATION;
+    }
+
+    private String getLatestUserText() {
+        List<Message> messages = this.chatMemory.get(this.chatSessionId);
+        if (messages == null || messages.isEmpty()) {
+            return null;
+        }
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            Message msg = messages.get(i);
+            if (msg instanceof UserMessage userMessage && StringUtils.hasText(userMessage.getText())) {
+                return userMessage.getText();
+            }
+        }
+        return null;
+    }
+
+    private boolean containsAnyIgnoreCase(String source, List<String> keywords) {
+        if (!StringUtils.hasText(source)) {
+            return false;
+        }
+        String lower = source.toLowerCase(Locale.ROOT);
+        return keywords.stream().anyMatch(k -> lower.contains(k.toLowerCase(Locale.ROOT)));
     }
 
     // 刷新 pendingMessages, 将数据通过 sse 发送给前端

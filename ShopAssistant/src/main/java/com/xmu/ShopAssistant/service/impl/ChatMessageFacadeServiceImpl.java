@@ -12,10 +12,12 @@ import com.xmu.ShopAssistant.model.request.UpdateChatMessageRequest;
 import com.xmu.ShopAssistant.model.response.CreateChatMessageResponse;
 import com.xmu.ShopAssistant.model.response.GetChatMessagesResponse;
 import com.xmu.ShopAssistant.model.vo.ChatMessageVO;
+import com.xmu.ShopAssistant.service.AgentMemoryService;
 import com.xmu.ShopAssistant.service.ChatMessageFacadeService;
 import lombok.AllArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -28,6 +30,7 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     private final ChatMessageMapper chatMessageMapper;
     private final ChatMessageConverter chatMessageConverter;
     private final ApplicationEventPublisher publisher;
+    private final AgentMemoryService agentMemoryService;
 
     @Override
     public GetChatMessagesResponse getChatMessagesBySessionId(String sessionId) {
@@ -66,6 +69,7 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     @Override
     public CreateChatMessageResponse createChatMessage(CreateChatMessageRequest request) {
         ChatMessage chatMessage = doCreateChatMessage(request);
+        maybeRememberAgentProfile(request);
         // 发布聊天通知事件
         publisher.publishEvent(new ChatEvent(
                         request.getAgentId(),
@@ -77,6 +81,19 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
         return CreateChatMessageResponse.builder()
                 .chatMessageId(chatMessage.getId())
                 .build();
+    }
+
+    private void maybeRememberAgentProfile(CreateChatMessageRequest request) {
+        if (request == null) {
+            return;
+        }
+        if (request.getRole() != ChatMessageDTO.RoleType.USER) {
+            return;
+        }
+        if (!StringUtils.hasText(request.getAgentId()) || !StringUtils.hasText(request.getSessionId())) {
+            return;
+        }
+        agentMemoryService.rememberProfileFacts(request.getAgentId(), request.getSessionId(), request.getContent());
     }
 
     @Override

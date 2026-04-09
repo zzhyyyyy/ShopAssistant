@@ -13,6 +13,7 @@ import com.xmu.ShopAssistant.model.dto.ChatMessageDTO;
 import com.xmu.ShopAssistant.model.dto.KnowledgeBaseDTO;
 import com.xmu.ShopAssistant.model.entity.Agent;
 import com.xmu.ShopAssistant.model.entity.KnowledgeBase;
+import com.xmu.ShopAssistant.service.AgentMemoryService;
 import com.xmu.ShopAssistant.service.ChatMessageFacadeService;
 import com.xmu.ShopAssistant.service.SseService;
 import com.xmu.ShopAssistant.service.ToolFacadeService;
@@ -43,6 +44,7 @@ public class ShopAiFactory {
     private final ToolFacadeService toolFacadeService;
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
+    private final AgentMemoryService agentMemoryService;
 
     // 运行时 Agent 配置
     private AgentDTO agentConfig;
@@ -56,7 +58,8 @@ public class ShopAiFactory {
             KnowledgeBaseConverter knowledgeBaseConverter,
             ToolFacadeService toolFacadeService,
             ChatMessageFacadeService chatMessageFacadeService,
-            ChatMessageConverter chatMessageConverter
+            ChatMessageConverter chatMessageConverter,
+            AgentMemoryService agentMemoryService
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -67,6 +70,7 @@ public class ShopAiFactory {
         this.toolFacadeService = toolFacadeService;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
+        this.agentMemoryService = agentMemoryService;
     }
 
     private Agent loadAgent(String agentId) {
@@ -81,6 +85,7 @@ public class ShopAiFactory {
         List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
         List<Message> memory = new ArrayList<>();
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
+            System.out.println("chatMessageDTO:"+chatMessageDTO);
             switch (chatMessageDTO.getRole()) {
                 case SYSTEM:
                     if (!StringUtils.hasLength(chatMessageDTO.getContent())) continue;
@@ -204,11 +209,12 @@ public class ShopAiFactory {
         if (Objects.isNull(chatClient)) {
             throw new IllegalStateException("未找到对应的 ChatClient: " + agent.getModel());
         }
+        String mergedSystemPrompt = mergeSystemPromptWithLongTermMemory(agent.getSystemPrompt(), agent.getId());
         return new ShopAi(
                 agent.getId(),
                 agent.getName(),
                 agent.getDescription(),
-                agent.getSystemPrompt(),
+                mergedSystemPrompt,
                 chatClient,
                 agentConfig.getChatOptions().getMessageLength(),
                 memory,
@@ -219,6 +225,26 @@ public class ShopAiFactory {
                 chatMessageFacadeService,
                 chatMessageConverter
         );
+    }
+
+    private String mergeSystemPromptWithLongTermMemory(String systemPrompt, String agentId) {
+        List<String> facts = agentMemoryService.listFactsByAgentId(agentId, 20);
+        if (facts.isEmpty()) {
+            return systemPrompt;
+        }
+        String memoryPrompt = facts.stream()
+                .map(f -> "- " + f)
+                .collect(Collectors.joining("\n"));
+        String addon = """
+                【跨会话用户画像记忆】
+                以下信息来自历史会话，可用于个性化回答；若与用户当前明确表述冲突，以当前会话为准：
+                %s
+                """.formatted(memoryPrompt);
+
+        if (!StringUtils.hasText(systemPrompt)) {
+            return addon;
+        }
+        return systemPrompt + "\n\n" + addon;
     }
 
     /**
