@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.xmu.ShopAssistant.mapper.AgentMemoryMapper">
+
+    <resultMap id="BaseResultMap" type="com.xmu.ShopAssistant.model.entity.AgentMemory">
+        <id property="id" column="id" jdbcType="VARCHAR"/>
+        <result property="agentId" column="agent_id" jdbcType="VARCHAR"/>
+        <result property="memoryKey" column="memory_key" jdbcType="VARCHAR"/>
+        <result property="memoryValue" column="memory_value" jdbcType="VARCHAR"/>
+        <result property="fact" column="fact" jdbcType="VARCHAR"/>
+        <result property="confidence" column="confidence" jdbcType="DOUBLE"/>
+        <result property="status" column="status" jdbcType="VARCHAR"/>
+        <result property="supersededByMemoryId" column="superseded_by_memory_id" jdbcType="VARCHAR"/>
+        <result property="sourceSessionId" column="source_session_id" jdbcType="VARCHAR"/>
+        <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+        <result property="updatedAt" column="updated_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.xmu.ShopAssistant.model.entity.AgentMemory"
+            keyColumn="id" keyProperty="id" useGeneratedKeys="true">
+        INSERT INTO agent_profile_memory
+        (
+            agent_id,
+            memory_key,
+            memory_value,
+            fact,
+            confidence,
+            status,
+            superseded_by_memory_id,
+            source_session_id,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                CAST(#{agentId} AS uuid),
+                #{memoryKey},
+                #{memoryValue},
+                #{fact},
+                #{confidence},
+                #{status},
+                <choose>
+                    <when test="supersededByMemoryId != null and supersededByMemoryId != ''">
+                        CAST(#{supersededByMemoryId} AS uuid)
+                    </when>
+                    <otherwise>
+                        NULL
+                    </otherwise>
+                </choose>,
+                CAST(#{sourceSessionId} AS uuid),
+                #{createdAt},
+                #{updatedAt}
+            )
+    </insert>
+
+    <select id="selectByAgentId" resultMap="BaseResultMap">
+        SELECT
+            id,
+            agent_id,
+            memory_key,
+            memory_value,
+            fact,
+            confidence,
+            status,
+            superseded_by_memory_id,
+            source_session_id,
+            created_at,
+            updated_at
+        FROM agent_profile_memory
+        WHERE agent_id = CAST(#{agentId} AS uuid)
+          AND status = 'ACTIVE'
+        ORDER BY updated_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectLatestActiveByAgentIdAndMemoryKey" resultMap="BaseResultMap">
+        SELECT
+            id,
+            agent_id,
+            memory_key,
+            memory_value,
+            fact,
+            confidence,
+            status,
+            superseded_by_memory_id,
+            source_session_id,
+            created_at,
+            updated_at
+        FROM agent_profile_memory
+        WHERE agent_id = CAST(#{agentId} AS uuid)
+          AND memory_key = #{memoryKey}
+          AND status = 'ACTIVE'
+        ORDER BY updated_at DESC
+        LIMIT 1
+    </select>
+
+    <update id="updateById" parameterType="com.xmu.ShopAssistant.model.entity.AgentMemory">
+        UPDATE agent_profile_memory
+        <set>
+            <if test="memoryKey != null">
+                memory_key = #{memoryKey},
+            </if>
+            <if test="memoryValue != null">
+                memory_value = #{memoryValue},
+            </if>
+            <if test="fact != null">
+                fact = #{fact},
+            </if>
+            <if test="confidence != null">
+                confidence = #{confidence},
+            </if>
+            <if test="status != null">
+                status = #{status},
+            </if>
+            <if test="supersededByMemoryId != null and supersededByMemoryId != ''">
+                superseded_by_memory_id = CAST(#{supersededByMemoryId} AS uuid),
+            </if>
+            <if test="sourceSessionId != null">
+                source_session_id = CAST(#{sourceSessionId} AS uuid),
+            </if>
+            updated_at = NOW()
+        </set>
+        WHERE id = CAST(#{id} AS uuid)
+    </update>
+</mapper>
