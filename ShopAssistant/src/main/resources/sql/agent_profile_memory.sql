@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS agent_profile_memory
     status                 VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE',
     superseded_by_memory_id UUID       NULL,
     source_session_id      UUID         NOT NULL,
+    evidence_count         INTEGER      NOT NULL DEFAULT 1,
+    last_confirmed_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
     created_at             TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMP    NOT NULL DEFAULT NOW()
 );
@@ -18,16 +20,22 @@ ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS memory_value VARCHAR(6
 ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 0.7;
 ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE';
 ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS superseded_by_memory_id UUID;
+ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS evidence_count INTEGER DEFAULT 1;
+ALTER TABLE agent_profile_memory ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMP DEFAULT NOW();
 
 UPDATE agent_profile_memory SET memory_key = COALESCE(memory_key, 'profile.statement.' || md5(fact));
 UPDATE agent_profile_memory SET memory_value = COALESCE(memory_value, 'stated');
 UPDATE agent_profile_memory SET status = COALESCE(status, 'ACTIVE');
 UPDATE agent_profile_memory SET confidence = COALESCE(confidence, 0.7);
+UPDATE agent_profile_memory SET evidence_count = COALESCE(evidence_count, 1);
+UPDATE agent_profile_memory SET last_confirmed_at = COALESCE(last_confirmed_at, updated_at, created_at, NOW());
 
 ALTER TABLE agent_profile_memory ALTER COLUMN memory_key SET NOT NULL;
 ALTER TABLE agent_profile_memory ALTER COLUMN memory_value SET NOT NULL;
 ALTER TABLE agent_profile_memory ALTER COLUMN status SET NOT NULL;
 ALTER TABLE agent_profile_memory ALTER COLUMN confidence SET NOT NULL;
+ALTER TABLE agent_profile_memory ALTER COLUMN evidence_count SET NOT NULL;
+ALTER TABLE agent_profile_memory ALTER COLUMN last_confirmed_at SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_agent_profile_memory_agent_id
     ON agent_profile_memory (agent_id);

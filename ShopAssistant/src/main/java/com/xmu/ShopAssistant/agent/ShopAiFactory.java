@@ -97,40 +97,87 @@ public class ShopAiFactory {
                     """.formatted(sessionSummary)));
         }
 
-        for (ChatMessageDTO chatMessageDTO : chatMessages) {
-            System.out.println("chatMessageDTO:"+chatMessageDTO);
-            switch (chatMessageDTO.getRole()) {
+        memory.addAll(rebuildProtocolSafeMessages(chatMessages));
+        return memory;
+    }
+
+    private List<Message> rebuildProtocolSafeMessages(List<ChatMessageDTO> chatMessages) {
+        List<Message> messages = new ArrayList<>();
+        if (chatMessages == null || chatMessages.isEmpty()) {
+            return messages;
+        }
+
+        for (int i = 0; i < chatMessages.size(); i++) {
+            ChatMessageDTO dto = chatMessages.get(i);
+            if (dto == null || dto.getRole() == null) {
+                continue;
+            }
+
+            switch (dto.getRole()) {
                 case SYSTEM:
-                    if (!StringUtils.hasLength(chatMessageDTO.getContent())) continue;
-                    memory.add(0, new SystemMessage(chatMessageDTO.getContent()));
+                    if (StringUtils.hasText(dto.getContent())) {
+                        messages.add(new SystemMessage(dto.getContent()));
+                    }
                     break;
                 case USER:
-                    if (!StringUtils.hasLength(chatMessageDTO.getContent())) continue;
-                    memory.add(new UserMessage(chatMessageDTO.getContent()));
+                    if (StringUtils.hasText(dto.getContent())) {
+                        messages.add(new UserMessage(dto.getContent()));
+                    }
                     break;
                 case ASSISTANT:
-                    memory.add(AssistantMessage.builder()
-                            .content(chatMessageDTO.getContent())
-                            .toolCalls(chatMessageDTO.getMetadata()
-                                    .getToolCalls())
+                    List<AssistantMessage.ToolCall> toolCalls = dto.getMetadata() == null
+                            ? List.of()
+                            : dto.getMetadata().getToolCalls();
+                    boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
+
+                    if (!hasToolCalls) {
+                        messages.add(AssistantMessage.builder()
+                                .content(dto.getContent())
+                                .build());
+                        break;
+                    }
+
+                    List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+                    int j = i + 1;
+                    while (j < chatMessages.size()) {
+                        ChatMessageDTO next = chatMessages.get(j);
+                        if (next == null || next.getRole() != ChatMessageDTO.RoleType.TOOL) {
+                            break;
+                        }
+                        if (next.getMetadata() != null && next.getMetadata().getToolResponse() != null) {
+                            responses.add(next.getMetadata().getToolResponse());
+                        }
+                        j++;
+                    }
+
+                    if (responses.isEmpty()) {
+                        // 避免向模型发送不完整的 tool 协议片段
+                        log.warn("跳过未配对的 assistant(tool_calls) 消息，index={}", i);
+                        break;
+                    }
+
+                    messages.add(AssistantMessage.builder()
+                            .content(dto.getContent())
+                            .toolCalls(toolCalls)
                             .build());
+                    messages.add(ToolResponseMessage.builder()
+                            .responses(responses)
+                            .build());
+                    i = j - 1;
                     break;
                 case TOOL:
-                    memory.add(ToolResponseMessage.builder()
-                            .responses(List.of(chatMessageDTO
-                                    .getMetadata()
-                                    .getToolResponse()))
-                            .build());
+                    // 只接受由 ASSISTANT(tool_calls) 驱动的 TOOL 响应，孤立 TOOL 直接丢弃
+                    log.warn("跳过孤立 tool 消息，index={}", i);
                     break;
                 default:
                     log.error("不支持的 Message 类型: {}, content = {}",
-                            chatMessageDTO.getRole().getRole(),
-                            chatMessageDTO.getContent()
+                            dto.getRole().getRole(),
+                            dto.getContent()
                     );
                     throw new IllegalStateException("不支持的 Message 类型");
             }
         }
-        return memory;
+        return messages;
     }
 
     private AgentDTO toAgentConfig(Agent agent) {

@@ -23,6 +23,8 @@ public class AgentMemory {
     private String status;
     private String supersededByMemoryId;
     private String sourceSessionId;
+    private Integer evidenceCount;
+    private LocalDateTime lastConfirmedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

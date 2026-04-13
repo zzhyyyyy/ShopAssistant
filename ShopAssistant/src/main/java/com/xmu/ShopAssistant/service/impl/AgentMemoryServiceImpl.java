@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,6 +22,27 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
 
     private static final int DEFAULT_FACT_LIMIT = 20;
     private static final int MAX_VALUE_LEN = 64;
+    private static final double MIN_CONFIDENCE = 0.50;
+    private static final double MAX_CONFIDENCE = 0.98;
+    private static final int RECENT_DAYS_THRESHOLD = 7;
+
+    // 动态分数参数
+    private static final double IDENTITY_BASE = 0.70;
+    private static final double EDUCATION_BASE = 0.70;
+    private static final double ATTRIBUTE_BASE = 0.65;
+    private static final double PREFERENCE_BASE = 0.75;
+
+    private static final double BONUS_PER_EVIDENCE = 0.03;
+    private static final double BONUS_EVIDENCE_CAP = 0.18;
+    private static final double BONUS_CROSS_SESSION = 0.10;
+    private static final double BONUS_STRONG_ASSERTION = 0.05;
+    private static final double BONUS_RECENT_RECONFIRM = 0.05;
+
+    private static final double PENALTY_UNCERTAIN = 0.10;
+    private static final double PENALTY_CONFLICT = 0.20;
+
+    private static final double DECAY_PER_30_DAYS = 0.03;
+    private static final double DECAY_CAP = 0.20;
 
     // 通用自述模式
     private static final Pattern IDENTITY_PATTERN =
@@ -43,17 +65,22 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
         if (extractedMemories.isEmpty()) {
             return;
         }
+        LocalDateTime now = LocalDateTime.now();
 
         for (ExtractedMemory extracted : extractedMemories) {
             AgentMemory existing = agentMemoryMapper.selectLatestActiveByAgentIdAndMemoryKey(agentId, extracted.memoryKey());
 
-            // 相同结论：刷新来源和置信度
+            // 相同结论：提升证据和置信度
             if (existing != null && extracted.memoryValue().equals(existing.getMemoryValue())) {
+                int evidenceCount = (existing.getEvidenceCount() == null ? 1 : existing.getEvidenceCount()) + 1;
+                double confidence = computeConfidence(extracted, existing, sessionId, evidenceCount, false, now);
                 AgentMemory update = AgentMemory.builder()
                         .id(existing.getId())
                         .fact(extracted.fact())
-                        .confidence(extracted.confidence())
+                        .confidence(confidence)
                         .sourceSessionId(sessionId)
+                        .evidenceCount(evidenceCount)
+                        .lastConfirmedAt(now)
                         .build();
                 agentMemoryMapper.updateById(update);
                 continue;
@@ -68,15 +95,18 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
                 agentMemoryMapper.updateById(demote);
             }
 
-            LocalDateTime now = LocalDateTime.now();
+            int initialEvidenceCount = 1;
+            double confidence = computeConfidence(extracted, existing, sessionId, initialEvidenceCount, existing != null, now);
             AgentMemory insert = AgentMemory.builder()
                     .agentId(agentId)
                     .memoryKey(extracted.memoryKey())
                     .memoryValue(extracted.memoryValue())
                     .fact(extracted.fact())
-                    .confidence(extracted.confidence())
+                    .confidence(confidence)
                     .status(AgentMemory.Status.ACTIVE.name())
                     .sourceSessionId(sessionId)
+                    .evidenceCount(initialEvidenceCount)
+                    .lastConfirmedAt(now)
                     .createdAt(now)
                     .updatedAt(now)
                     .build();
@@ -123,6 +153,49 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
                 .toList();
     }
 
+    private double computeConfidence(
+            ExtractedMemory extracted,
+            AgentMemory existing,
+            String sessionId,
+            int evidenceCount,
+            boolean conflict,
+            LocalDateTime now
+    ) {
+        double score = extracted.baseConfidence();
+
+        if (extracted.strongAssertion()) {
+            score += BONUS_STRONG_ASSERTION;
+        }
+        if (extracted.uncertain()) {
+            score -= PENALTY_UNCERTAIN;
+        }
+
+        if (evidenceCount > 1) {
+            score += Math.min(BONUS_EVIDENCE_CAP, (evidenceCount - 1) * BONUS_PER_EVIDENCE);
+        }
+
+        if (existing != null) {
+            if (!sameSession(existing.getSourceSessionId(), sessionId)) {
+                score += BONUS_CROSS_SESSION;
+            }
+            if (existing.getLastConfirmedAt() != null) {
+                long days = ChronoUnit.DAYS.between(existing.getLastConfirmedAt(), now);
+                if (days <= RECENT_DAYS_THRESHOLD) {
+                    score += BONUS_RECENT_RECONFIRM;
+                }
+                if (days > 0) {
+                    score -= Math.min(DECAY_CAP, (days / 30.0) * DECAY_PER_30_DAYS);
+                }
+            }
+        }
+
+        if (conflict) {
+            score -= PENALTY_CONFLICT;
+        }
+
+        return clamp(score, MIN_CONFIDENCE, MAX_CONFIDENCE);
+    }
+
     private List<ExtractedMemory> extractMemories(String text) {
         String[] pieces = text.split("[。！？；;，,\\n]");
         Map<String, ExtractedMemory> memoryByKey = new LinkedHashMap<>();
@@ -144,11 +217,14 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
     }
 
     private ExtractedMemory parseStructuredMemory(String sentence) {
+        boolean uncertain = hasUncertainHint(sentence);
+        boolean strongAssertion = hasStrongAssertionHint(sentence);
+
         Matcher identityMatcher = IDENTITY_PATTERN.matcher(sentence);
         if (identityMatcher.find()) {
             String value = normalizeValue(identityMatcher.group(1));
             if (StringUtils.hasText(value)) {
-                return new ExtractedMemory("profile.identity", value, sentence, 0.9);
+                return new ExtractedMemory("profile.identity", value, sentence, IDENTITY_BASE, uncertain, strongAssertion);
             }
         }
 
@@ -156,7 +232,7 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
         if (educationMatcher.find()) {
             String value = normalizeValue(educationMatcher.group(1));
             if (StringUtils.hasText(value)) {
-                return new ExtractedMemory("profile.education.current", value, sentence, 0.9);
+                return new ExtractedMemory("profile.education.current", value, sentence, EDUCATION_BASE, uncertain, strongAssertion);
             }
         }
 
@@ -165,7 +241,7 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
             String attr = normalizeKeyFragment(attributeMatcher.group(1));
             String value = normalizeValue(attributeMatcher.group(2));
             if (StringUtils.hasText(attr) && StringUtils.hasText(value)) {
-                return new ExtractedMemory("profile.attr." + attr, value, sentence, 0.85);
+                return new ExtractedMemory("profile.attr." + attr, value, sentence, ATTRIBUTE_BASE, uncertain, strongAssertion);
             }
         }
 
@@ -173,7 +249,7 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
         if (likeMatcher.find()) {
             String target = normalizePreferenceTarget(likeMatcher.group(1));
             if (StringUtils.hasText(target)) {
-                return new ExtractedMemory("preference." + target, "like", sentence, 0.95);
+                return new ExtractedMemory("preference." + target, "like", sentence, PREFERENCE_BASE, uncertain, strongAssertion);
             }
         }
 
@@ -181,11 +257,43 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
         if (dislikeMatcher.find()) {
             String target = normalizePreferenceTarget(dislikeMatcher.group(1));
             if (StringUtils.hasText(target)) {
-                return new ExtractedMemory("preference." + target, "dislike", sentence, 0.95);
+                return new ExtractedMemory("preference." + target, "dislike", sentence, PREFERENCE_BASE, uncertain, strongAssertion);
             }
         }
 
         return null;
+    }
+
+    private boolean hasUncertainHint(String sentence) {
+        if (!StringUtils.hasText(sentence)) {
+            return false;
+        }
+        return sentence.contains("可能")
+                || sentence.contains("大概")
+                || sentence.contains("好像")
+                || sentence.contains("也许")
+                || sentence.contains("应该是");
+    }
+
+    private boolean hasStrongAssertionHint(String sentence) {
+        if (!StringUtils.hasText(sentence)) {
+            return false;
+        }
+        return sentence.contains("就是")
+                || sentence.contains("一直")
+                || sentence.contains("确定")
+                || sentence.contains("肯定")
+                || sentence.contains("必须");
+    }
+
+    private boolean sameSession(String oldSessionId, String newSessionId) {
+        return StringUtils.hasText(oldSessionId)
+                && StringUtils.hasText(newSessionId)
+                && oldSessionId.equals(newSessionId);
+    }
+
+    private double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private String normalizePreferenceTarget(String raw) {
@@ -226,6 +334,13 @@ public class AgentMemoryServiceImpl implements AgentMemoryService {
         return sentence.trim().replaceAll("\\s+", " ");
     }
 
-    private record ExtractedMemory(String memoryKey, String memoryValue, String fact, double confidence) {
+    private record ExtractedMemory(
+            String memoryKey,
+            String memoryValue,
+            String fact,
+            double baseConfidence,
+            boolean uncertain,
+            boolean strongAssertion
+    ) {
     }
 }
