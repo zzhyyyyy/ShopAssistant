@@ -15,6 +15,7 @@ import com.xmu.ShopAssistant.model.entity.Agent;
 import com.xmu.ShopAssistant.model.entity.KnowledgeBase;
 import com.xmu.ShopAssistant.service.AgentMemoryService;
 import com.xmu.ShopAssistant.service.ChatMessageFacadeService;
+import com.xmu.ShopAssistant.service.SessionSummaryService;
 import com.xmu.ShopAssistant.service.SseService;
 import com.xmu.ShopAssistant.service.ToolFacadeService;
 import org.slf4j.Logger;
@@ -45,6 +46,7 @@ public class ShopAiFactory {
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
     private final AgentMemoryService agentMemoryService;
+    private final SessionSummaryService sessionSummaryService;
 
     // 运行时 Agent 配置
     private AgentDTO agentConfig;
@@ -59,7 +61,8 @@ public class ShopAiFactory {
             ToolFacadeService toolFacadeService,
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
-            AgentMemoryService agentMemoryService
+            AgentMemoryService agentMemoryService,
+            SessionSummaryService sessionSummaryService
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -71,6 +74,7 @@ public class ShopAiFactory {
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentMemoryService = agentMemoryService;
+        this.sessionSummaryService = sessionSummaryService;
     }
 
     private Agent loadAgent(String agentId) {
@@ -84,6 +88,15 @@ public class ShopAiFactory {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
         List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
         List<Message> memory = new ArrayList<>();
+
+        String sessionSummary = sessionSummaryService.getSessionSummary(chatSessionId);
+        if (StringUtils.hasLength(sessionSummary)) {
+            memory.add(new SystemMessage("""
+                    【会话滚动摘要】
+                    %s
+                    """.formatted(sessionSummary)));
+        }
+
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             System.out.println("chatMessageDTO:"+chatMessageDTO);
             switch (chatMessageDTO.getRole()) {

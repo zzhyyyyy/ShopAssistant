@@ -14,6 +14,7 @@ import com.xmu.ShopAssistant.model.response.GetChatMessagesResponse;
 import com.xmu.ShopAssistant.model.vo.ChatMessageVO;
 import com.xmu.ShopAssistant.service.AgentMemoryService;
 import com.xmu.ShopAssistant.service.ChatMessageFacadeService;
+import com.xmu.ShopAssistant.service.SessionSummaryService;
 import lombok.AllArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,7 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     private final ChatMessageConverter chatMessageConverter;
     private final ApplicationEventPublisher publisher;
     private final AgentMemoryService agentMemoryService;
+    private final SessionSummaryService sessionSummaryService;
 
     @Override
     public GetChatMessagesResponse getChatMessagesBySessionId(String sessionId) {
@@ -70,6 +72,7 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     public CreateChatMessageResponse createChatMessage(CreateChatMessageRequest request) {
         ChatMessage chatMessage = doCreateChatMessage(request);
         maybeRememberAgentProfile(request);
+        maybeRefreshSessionSummary(request, chatMessage);
         // 发布聊天通知事件
         publisher.publishEvent(new ChatEvent(
                         request.getAgentId(),
@@ -94,6 +97,16 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
             return;
         }
         agentMemoryService.rememberProfileFacts(request.getAgentId(), request.getSessionId(), request.getContent());
+    }
+
+    private void maybeRefreshSessionSummary(CreateChatMessageRequest request, ChatMessage chatMessage) {
+        if (request == null || chatMessage == null) {
+            return;
+        }
+        if (request.getRole() != ChatMessageDTO.RoleType.USER) {
+            return;
+        }
+        sessionSummaryService.refreshSessionSummary(request.getAgentId(), chatMessage.getSessionId());
     }
 
     @Override

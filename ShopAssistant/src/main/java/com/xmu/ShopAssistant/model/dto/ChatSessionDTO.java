@@ -21,6 +21,10 @@ public class ChatSessionDTO {
     private LocalDateTime updatedAt;
 
     @Data
+    @Builder
     public static class MetaData {
+        private String sessionSummary;
+        private Integer summarizedMessageCount;
+        private LocalDateTime summaryUpdatedAt;
     }
 }
