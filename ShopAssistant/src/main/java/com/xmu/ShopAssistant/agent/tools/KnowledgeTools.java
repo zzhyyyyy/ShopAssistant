@@ -1,17 +1,25 @@
 package com.xmu.ShopAssistant.agent.tools;
 
+import com.xmu.ShopAssistant.mapper.KnowledgeBaseMapper;
+import com.xmu.ShopAssistant.model.entity.KnowledgeBase;
 import com.xmu.ShopAssistant.service.RagService;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Component
 public class KnowledgeTools implements Tool {
 
     private final RagService ragService;
+    private final KnowledgeBaseMapper knowledgeBaseMapper;
 
-    public KnowledgeTools(RagService ragService) {
+    public KnowledgeTools(RagService ragService, KnowledgeBaseMapper knowledgeBaseMapper) {
         this.ragService = ragService;
+        this.knowledgeBaseMapper = knowledgeBaseMapper;
     }
 
     @Override
@@ -31,10 +39,52 @@ public class KnowledgeTools implements Tool {
 
     @org.springframework.ai.tool.annotation.Tool(
             name = "KnowledgeTool",
-            description = "从指定知识库中执行相似性检索（RAG）。参数为知识库 ID（kbsId）和查询文本（query），返回与查询最相关的知识片段。"
+            description = "从知识库执行相似性检索（RAG）。参数：kbsId（知识库ID；若传ALL或留空则自动检索所有知识库）和query（查询文本）。"
     )
     public String knowledgeQuery(String kbsId, String query) {
         List<String> strings = ragService.similaritySearch(kbsId, query);
-        return String.join("\n", strings);
+        if (strings == null || strings.isEmpty()) {
+            return "[KB " + kbsId + "] 无匹配结果";
+        }
+        return "[KB " + kbsId + "]\n" + String.join("\n", strings);
+    }
+
+    @org.springframework.ai.tool.annotation.Tool(
+            name = "KnowledgeToolAll",
+            description = "对所有知识库执行语义检索。参数：query。返回带知识库ID的候选片段，用于避免漏检。"
+    )
+    public String knowledgeQueryAll(String query) {
+        if (!StringUtils.hasText(query)) {
+            return "查询为空";
+        }
+        return searchAllKnowledgeBases(query);
+    }
+
+    private String searchAllKnowledgeBases(String query) {
+        List<KnowledgeBase> allKbs = knowledgeBaseMapper.selectAll();
+        if (allKbs == null || allKbs.isEmpty()) {
+            return "当前没有可检索的知识库";
+        }
+
+        Set<String> kbIds = new LinkedHashSet<>();
+        for (KnowledgeBase kb : allKbs) {
+            if (kb != null && StringUtils.hasText(kb.getId())) {
+                kbIds.add(kb.getId());
+            }
+        }
+
+        List<String> blocks = new ArrayList<>();
+        for (String id : kbIds) {
+            List<String> hits = ragService.similaritySearch(id, query);
+            if (hits == null || hits.isEmpty()) {
+                continue;
+            }
+            blocks.add("[KB " + id + "]\n" + String.join("\n", hits));
+        }
+
+        if (blocks.isEmpty()) {
+            return "所有知识库均未检索到相关结果";
+        }
+        return String.join("\n\n", blocks);
     }
 }

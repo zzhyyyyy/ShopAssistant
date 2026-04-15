@@ -283,7 +283,9 @@ public class ShopAi {
                                 \s
                 【额外信息】
                 - 你目前拥有的知识库列表以及描述：%s
-                - 如果有缺失的上下文时，优先从知识库中进行搜索
+                - 如果用户问题是知识问答/事实查询，必须优先进行知识库检索
+                - 为避免漏检，优先调用 KnowledgeToolAll(query)；或者调用 KnowledgeTool 时使用 kbsId=ALL
+                - 在尚未完成全库检索前，不要调用 terminate
                 """.formatted(this.availableKbs);
 
         // 将 thinkPrompt 通过 .user(thinkPrompt) 的方式构造进入 chatClient 中
@@ -294,7 +296,7 @@ public class ShopAi {
                 .messages(this.chatMemory.get(this.chatSessionId))
                 .build();
 
-        this.lastChatResponse = this.chatClient
+        this.lastChatResponse = this.chatClient //lastest chat response 最新的一轮对话回复
                 .prompt(prompt)
                 .system(thinkPrompt)
                 .toolCallbacks(this.availableTools.toArray(new ToolCallback[0]))

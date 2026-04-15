@@ -23,6 +23,7 @@ import { useDocuments } from "../../hooks/useDocuments.ts";
 import { uploadDocument, type DocumentVO } from "../../api/api.ts";
 
 const { Title, Text, Paragraph } = Typography;
+const SUPPORTED_EXTENSIONS = [".md", ".markdown", ".txt", ".pdf"];
 
 const KnowledgeBaseView: React.FC = () => {
   const { knowledgeBaseId } = useParams<{ knowledgeBaseId?: string }>();
@@ -44,16 +45,27 @@ const KnowledgeBaseView: React.FC = () => {
   // 处理文件上传
   const handleUpload: UploadProps["customRequest"] = async (options) => {
     const { file, onSuccess, onError } = options;
+    const uploadFile = file as File;
 
     if (!knowledgeBaseId) {
       message.error("请先选择知识库");
+      return;
+    }
+    const filename = uploadFile.name?.toLowerCase() || "";
+    const isSupported = SUPPORTED_EXTENSIONS.some((ext) =>
+      filename.endsWith(ext),
+    );
+    if (!isSupported) {
+      const err = new Error("仅支持 .md / .markdown / .txt / .pdf 格式");
+      message.error(err.message);
+      onError?.(err);
       return;
     }
 
     setUploading(true);
 
     try {
-      await uploadDocument(knowledgeBaseId, file as File);
+      await uploadDocument(knowledgeBaseId, uploadFile);
       message.success("文档上传成功");
       await refreshDocuments();
       onSuccess?.(file);
@@ -195,7 +207,7 @@ const KnowledgeBaseView: React.FC = () => {
             <Upload
               customRequest={handleUpload}
               showUploadList={false}
-              accept=".md"
+              accept=".md,.markdown,.txt,.pdf"
               disabled={uploading}
             >
               <Button
@@ -208,7 +220,7 @@ const KnowledgeBaseView: React.FC = () => {
               </Button>
             </Upload>
             <Text type="secondary" className="block mt-2 text-xs">
-              支持格式: Markdown
+              支持格式: MD / TXT / PDF
             </Text>
           </Card>
         </div>
