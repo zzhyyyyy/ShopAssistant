@@ -308,7 +308,7 @@ public class ShopAiFactory {
     }
 
     /**
-     * 创建一个 JChatMind 实例
+     * 创建一个 ShopAi 实例
      */
     public ShopAi create(String agentId, String chatSessionId) {
         Agent agent = loadAgent(agentId);

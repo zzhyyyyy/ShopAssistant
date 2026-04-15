@@ -19,11 +19,16 @@ import com.xmu.ShopAssistant.service.MarkdownParserService;
 import com.xmu.ShopAssistant.service.RagService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -34,6 +39,10 @@ import java.util.List;
 @AllArgsConstructor
 @Slf4j
 public class DocumentFacadeServiceImpl implements DocumentFacadeService {
+    private static final int TXT_CHUNK_SIZE = 800;
+    private static final int TXT_CHUNK_OVERLAP = 120;
+    private static final int PDF_CHUNK_SIZE = 1000;
+    private static final int PDF_CHUNK_OVERLAP = 150;
 
     private final DocumentMapper documentMapper;
     private final DocumentConverter documentConverter;
@@ -158,13 +167,7 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
 
             log.info("文档上传成功: kbId={}, documentId={}, filename={}", kbId, documentId, originalFilename);
 
-            // 如果是 Markdown 文件，进行解析并生成 chunks
-            if ("md".equalsIgnoreCase(filetype) || "markdown".equalsIgnoreCase(filetype)) {
-                processMarkdownDocument(kbId, documentId, filePath);
-            } else {
-                // TODO: 未来可以增加其他文件类型的处理逻辑
-                log.warn("待新增处理的文件类型: {}", filetype);
-            }
+            processDocumentByType(kbId, documentId, filePath, filetype);
 
             return CreateDocumentResponse.builder()
                     .documentId(documentId)
@@ -221,48 +224,153 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
                     return;
                 }
 
-                LocalDateTime now = LocalDateTime.now();
-                int chunkCount = 0;
-
-                // 为每个章节生成 chunk
-                for (MarkdownParserService.MarkdownSection section : sections) {
-                    String title = section.getTitle();
-                    String content = section.getContent();
-
-                    if (title == null || title.trim().isEmpty()) {
-                        continue;
-                    }
-
-                    // 对标题进行 embedding
-                    float[] embedding = ragService.embed(title);
-
-                    // 创建 ChunkBgeM3 实体
-                    ChunkBgeM3 chunk = ChunkBgeM3.builder()
-                            .kbId(kbId)
-                            .docId(documentId)
-                            .content(content != null ? content : "")
-                            .metadata(null) // 可以存储标题信息到 metadata
-                            .embedding(embedding)
-                            .createdAt(now)
-                            .updatedAt(now)
-                            .build();
-
-                    // 插入数据库
-                    int result = chunkBgeM3Mapper.insert(chunk);
-
-                    if (result > 0) {
-                        chunkCount++;
-                        log.debug("创建 chunk 成功: title={}, chunkId={}", title, chunk.getId());
-                    } else {
-                        log.warn("创建 chunk 失败: title={}", title);
-                    }
-                }
+                int chunkCount = persistChunksFromSections(kbId, documentId, sections);
                 log.info("Markdown 文档处理完成: documentId={}, 共生成 {} 个 chunks", documentId, chunkCount);
             }
         } catch (Exception e) {
             log.error("处理 Markdown 文档失败: documentId={}", documentId, e);
             // 不抛出异常，避免影响文档上传流程
         }
+    }
+
+    private void processTxtDocument(String kbId, String documentId, String filePath) {
+        try {
+            log.info("开始处理 TXT 文档: kbId={}, documentId={}, filePath={}", kbId, documentId, filePath);
+            Path path = documentStorageService.getFilePath(filePath);
+            String text = Files.readString(path, StandardCharsets.UTF_8);
+            List<MarkdownParserService.MarkdownSection> sections = splitTextToSections(text, TXT_CHUNK_SIZE, TXT_CHUNK_OVERLAP, "TXT段落");
+            int chunkCount = persistChunksFromSections(kbId, documentId, sections);
+            log.info("TXT 文档处理完成: documentId={}, 共生成 {} 个 chunks", documentId, chunkCount);
+        } catch (Exception e) {
+            log.error("处理 TXT 文档失败: documentId={}", documentId, e);
+        }
+    }
+
+    private void processPdfDocument(String kbId, String documentId, String filePath) {
+        try {
+            log.info("开始处理 PDF 文档: kbId={}, documentId={}, filePath={}", kbId, documentId, filePath);
+            Path path = documentStorageService.getFilePath(filePath);
+            StringBuilder allText = new StringBuilder();
+            try (PDDocument document = Loader.loadPDF(path.toFile())) {
+                PDFTextStripper stripper = new PDFTextStripper();
+                int pages = document.getNumberOfPages();
+                for (int page = 1; page <= pages; page++) {
+                    stripper.setStartPage(page);
+                    stripper.setEndPage(page);
+                    String pageText = stripper.getText(document);
+                    if (StringUtils.hasText(pageText)) {
+                        allText.append(pageText).append("\n");
+                    }
+                }
+            }
+
+            List<MarkdownParserService.MarkdownSection> sections = splitTextToSections(
+                    allText.toString(),
+                    PDF_CHUNK_SIZE,
+                    PDF_CHUNK_OVERLAP,
+                    "PDF段落"
+            );
+            int chunkCount = persistChunksFromSections(kbId, documentId, sections);
+            log.info("PDF 文档处理完成: documentId={}, 共生成 {} 个 chunks", documentId, chunkCount);
+        } catch (Exception e) {
+            log.error("处理 PDF 文档失败: documentId={}", documentId, e);
+        }
+    }
+
+    private void processDocumentByType(String kbId, String documentId, String filePath, String filetype) {
+        if ("md".equalsIgnoreCase(filetype) || "markdown".equalsIgnoreCase(filetype)) {
+            processMarkdownDocument(kbId, documentId, filePath);
+            return;
+        }
+        if ("txt".equalsIgnoreCase(filetype)) {
+            processTxtDocument(kbId, documentId, filePath);
+            return;
+        }
+        if ("pdf".equalsIgnoreCase(filetype)) {
+            processPdfDocument(kbId, documentId, filePath);
+            return;
+        }
+        log.warn("暂不支持的文件类型: {}", filetype);
+    }
+
+    private int persistChunksFromSections(String kbId, String documentId, List<MarkdownParserService.MarkdownSection> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return 0;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        int chunkCount = 0;
+        for (MarkdownParserService.MarkdownSection section : sections) {
+            String title = section.getTitle();
+            String content = section.getContent();
+            if (!StringUtils.hasText(content)) {
+                continue;
+            }
+
+            // 对标题+内容前缀进行向量化，兼顾主题词与正文语义
+            String embeddingText = StringUtils.hasText(title)
+                    ? title + "\n" + truncate(content, 300)
+                    : truncate(content, 300);
+            float[] embedding = ragService.embed(embeddingText);
+
+            ChunkBgeM3 chunk = ChunkBgeM3.builder()
+                    .kbId(kbId)
+                    .docId(documentId)
+                    .content(content)
+                    .metadata(title)
+                    .embedding(embedding)
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build();
+
+            int result = chunkBgeM3Mapper.insert(chunk);
+            if (result > 0) {
+                chunkCount++;
+            }
+        }
+        return chunkCount;
+    }
+
+    private List<MarkdownParserService.MarkdownSection> splitTextToSections(
+            String text,
+            int chunkSize,
+            int overlap,
+            String titlePrefix
+    ) {
+        List<MarkdownParserService.MarkdownSection> sections = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return sections;
+        }
+        String normalized = text.replace("\r\n", "\n").replace("\r", "\n").trim();
+        if (!StringUtils.hasText(normalized)) {
+            return sections;
+        }
+
+        int start = 0;
+        int idx = 1;
+        while (start < normalized.length()) {
+            int end = Math.min(start + chunkSize, normalized.length());
+            String chunk = normalized.substring(start, end).trim();
+            if (StringUtils.hasText(chunk)) {
+                sections.add(new MarkdownParserService.MarkdownSection(titlePrefix + idx, chunk));
+                idx++;
+            }
+            if (end >= normalized.length()) {
+                break;
+            }
+            start = Math.max(start + 1, end - overlap);
+        }
+        return sections;
+    }
+
+    private String truncate(String text, int maxLen) {
+        if (!StringUtils.hasText(text)) {
+            return "";
+        }
+        if (text.length() <= maxLen) {
+            return text;
+        }
+        return text.substring(0, maxLen);
     }
 
     /**
